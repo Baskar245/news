@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from datetime import datetime
 import cloudinary.uploader
 import traceback
 
@@ -11,7 +12,7 @@ app = FastAPI(
     version="1.0"
 )
 
-# Allow Flutter/Web requests
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -24,7 +25,7 @@ app.add_middleware(
 @app.get("/")
 def home():
     return {
-        "message": "News Archive Backend Running Successfully"
+        "message": "News Portal Backend Running Successfully"
     }
 
 
@@ -35,17 +36,17 @@ async def upload_news(
 ):
     try:
 
-        print("========== NEW UPLOAD ==========")
-        print("Date:", news_date)
-        print("Image:", image.filename)
+        # Convert YYYY-MM-DD string to PostgreSQL DATE
+        date_obj = datetime.strptime(news_date, "%Y-%m-%d").date()
+
+        print("Uploading image...")
 
         # Upload image to Cloudinary
-        result = cloudinary.uploader.upload(image.file)
+        upload_result = cloudinary.uploader.upload(image.file)
 
-        image_url = result["secure_url"]
+        image_url = upload_result["secure_url"]
 
-        print("Cloudinary Upload Success")
-        print(image_url)
+        print("Cloudinary Success")
 
         # Save into PostgreSQL
         cursor.execute(
@@ -53,12 +54,12 @@ async def upload_news(
             INSERT INTO news(news_date, image_url)
             VALUES(%s,%s)
             """,
-            (news_date, image_url)
+            (date_obj, image_url)
         )
 
         conn.commit()
 
-        print("Database Insert Success")
+        print("Database Success")
 
         return {
             "success": True,
@@ -67,6 +68,8 @@ async def upload_news(
         }
 
     except Exception as e:
+
+        conn.rollback()
 
         traceback.print_exc()
 
@@ -81,6 +84,8 @@ def get_news(news_date: str):
 
     try:
 
+        date_obj = datetime.strptime(news_date, "%Y-%m-%d").date()
+
         cursor.execute(
             """
             SELECT id, news_date, image_url
@@ -88,25 +93,25 @@ def get_news(news_date: str):
             WHERE news_date=%s
             ORDER BY id
             """,
-            (news_date,)
+            (date_obj,)
         )
 
         rows = cursor.fetchall()
 
-        news = []
+        result = []
 
         for row in rows:
-            news.append(
-                {
-                    "id": row[0],
-                    "date": str(row[1]),
-                    "image_url": row[2]
-                }
-            )
+            result.append({
+                "id": row[0],
+                "date": str(row[1]),
+                "image_url": row[2]
+            })
 
-        return news
+        return result
 
     except Exception as e:
+
+        conn.rollback()
 
         traceback.print_exc()
 
@@ -119,6 +124,7 @@ def get_news(news_date: str):
 @app.get("/health")
 def health():
     return {
-        "status": "Backend Running",
-        "database": "Connected"
+        "status": "OK",
+        "database": "Connected",
+        "cloudinary": "Configured"
     }
