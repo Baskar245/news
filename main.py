@@ -1,18 +1,18 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
-import cloudinary.uploader
 import traceback
+import cloudinary.uploader
 
 import cloudinary_config
-from database import conn, cursor
+from database import get_connection
 
 app = FastAPI(
-    title="News Portal API",
+    title="News Archive API",
     version="1.0"
 )
 
-# CORS
+# Allow Flutter/Web to access the API
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,7 +25,14 @@ app.add_middleware(
 @app.get("/")
 def home():
     return {
-        "message": "News Portal Backend Running Successfully"
+        "message": "News Archive Backend Running"
+    }
+
+
+@app.get("/health")
+def health():
+    return {
+        "status": "OK"
     }
 
 
@@ -34,32 +41,30 @@ async def upload_news(
     news_date: str = Form(...),
     image: UploadFile = File(...)
 ):
+    conn = None
+    cursor = None
+
     try:
-
-        # Convert YYYY-MM-DD string to PostgreSQL DATE
+        # Expect YYYY-MM-DD
         date_obj = datetime.strptime(news_date, "%Y-%m-%d").date()
-
-        print("Uploading image...")
 
         # Upload image to Cloudinary
         upload_result = cloudinary.uploader.upload(image.file)
-
         image_url = upload_result["secure_url"]
 
-        print("Cloudinary Success")
+        # Open database connection
+        conn = get_connection()
+        cursor = conn.cursor()
 
-        # Save into PostgreSQL
         cursor.execute(
             """
-            INSERT INTO news(news_date, image_url)
-            VALUES(%s,%s)
+            INSERT INTO news (news_date, image_url)
+            VALUES (%s, %s)
             """,
             (date_obj, image_url)
         )
 
         conn.commit()
-
-        print("Database Success")
 
         return {
             "success": True,
@@ -68,8 +73,8 @@ async def upload_news(
         }
 
     except Exception as e:
-
-        conn.rollback()
+        if conn:
+            conn.rollback()
 
         traceback.print_exc()
 
@@ -78,19 +83,29 @@ async def upload_news(
             detail=str(e)
         )
 
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
 
 @app.get("/news/{news_date}")
 def get_news(news_date: str):
+    conn = None
+    cursor = None
 
     try:
-
         date_obj = datetime.strptime(news_date, "%Y-%m-%d").date()
+
+        conn = get_connection()
+        cursor = conn.cursor()
 
         cursor.execute(
             """
             SELECT id, news_date, image_url
             FROM news
-            WHERE news_date=%s
+            WHERE news_date = %s
             ORDER BY id
             """,
             (date_obj,)
@@ -110,9 +125,6 @@ def get_news(news_date: str):
         return result
 
     except Exception as e:
-
-        conn.rollback()
-
         traceback.print_exc()
 
         raise HTTPException(
@@ -120,11 +132,8 @@ def get_news(news_date: str):
             detail=str(e)
         )
 
-
-@app.get("/health")
-def health():
-    return {
-        "status": "OK",
-        "database": "Connected",
-        "cloudinary": "Configured"
-    }
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
